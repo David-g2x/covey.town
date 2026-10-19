@@ -106,3 +106,120 @@ handles only two cases: `ValidateError`, which returns 422, and any other `Error
 returns **500** "Internal Server Error". As a result, a wrong password or a bad update value
 returns 500 even though the swagger spec says 400. This is not fixed here; it belongs to
 **Task 2.4**.
+
+## Task 1.5: Activity and occupant tracking, recommendation schemas
+
+User Story 2: the guide recommends live activities that have players in them. This task only
+adds types and docs. The routes and server logic come in Task 3.3.
+
+### Trace
+
+- **Every activity is an `InteractableArea`** in `Town._interactables`.
+  `Town.initializeFromMap` builds them from the tilemap's `Objects` layer:
+  `ViewingArea.fromMapObject`, `ConversationArea.fromMapObject`, and `GameAreaFactory` (which
+  reads the `type` property, `TicTacToe` or `ConnectFour`). The area's ID is the map
+  object's name, so the display name and the ID are the same today.
+- **Occupants are kept current by `Town._updatePlayerLocation`** on every `playerMovement`.
+  It removes the player from the area they left and adds them to the area they entered.
+  The server holds everything a snapshot needs (areas, occupants, game state, players'
+  `userName`s), so **no data is needed from the frontend**.
+- **Correction 1 to the earlier read:** `_updatePlayerLocation` only adds a player to an
+  area that is already `isActive`. Conversation and viewing areas count as active only when
+  they have occupants, so walking into an empty one does not make you an occupant. You become
+  one when someone sets the topic or video (`Town.addConversationArea` /
+  `addViewingArea` call `addPlayersWithinBounds`). For recommendations, this means
+  conversation and viewing occupants are the players who are actually taking part.
+- **Correction 2 to the earlier read:** `GameArea.isActive` is always `true`, and the game
+  object stays around after its players leave. If the last player leaves before a game
+  starts, Connect Four stays at `WAITING_FOR_PLAYERS` and Tic Tac Toe resets to
+  `WAITING_TO_START`, in both cases with **no players**. So status alone is not enough; the
+  game must also have at least one player.
+- `ConversationArea.remove()` clears the topic, and `ViewingArea.remove()` clears the video,
+  when the last occupant leaves.
+- The map's `video` property on viewing areas is ignored by `ViewingArea.fromMapObject`, so
+  every viewing area starts with no video.
+
+### Inclusion rules ("active")
+
+| Area type | Active when | `playerNames` from |
+| --- | --- | --- |
+| `ConversationArea` | `topic` is set and occupants > 0 | area occupants |
+| `ViewingArea` | `video` is set and occupants > 0 | area occupants |
+| `GameArea` | `game` exists, `game.state.status` is `WAITING_FOR_PLAYERS`, `WAITING_TO_START` or `IN_PROGRESS` (not `OVER`), **and** `game.players.length > 0` | the game's players (the area's occupants also include spectators) |
+
+For games, `hasOpenSeat` is true while the game has fewer than 2 players.
+
+### Tilemap (`frontend/public/assets/tilemaps/indoors.json`)
+
+There are no rooms. The `Objects` layer contains:
+
+| Name | Type |
+| --- | --- |
+| Foyer Table 1–7 | ConversationArea |
+| Basement Dining Table 1 | ConversationArea |
+| Tic Tac Toe 1 | GameArea (`TicTacToe`) |
+| **Tic Tac Toe 2** | **ConversationArea** (it has a `type: TicTacToe` property, but its object type is wrong) |
+| Connect Four 1, Connect Four 2 | GameArea (`ConnectFour`) |
+| Fish tank, Basement TV | ViewingArea |
+
+The map also has two transporters ("Stairs to basement" / "Stairs Up"), a spawn point and
+two unnamed objects. The only hint of rooms is in the area names ("Foyer…", "Basement…"), so
+`ActivityLocation.zone` needs an explicit area-to-room config (Task 2.5).
+
+**Map bug: "Tic Tac Toe 2"** is created as a conversation area, so it can never host a game.
+Once someone sets a topic there, it shows up in recommendations as a conversation called
+"Tic Tac Toe 2". This task leaves the map unchanged; the team should decide whether to fix
+it (change the type to `GameArea`) or exclude it.
+
+### Design flow (Figma "Wizard of Oz Demo (Empty Town)" v26)
+
+1. The guide greets the player and offers two buttons: **"Find an Activity"** and **"Catch Up
+   on a Conversation"** (the second is Task 1.7).
+2. "Find an Activity" lists live activities as `"<areaName> · <playerNames>"`, e.g.
+   "Connect Four 2 · Alex & Sam", "Tic Tac Toe 1 · Priya & Jordan", "Basement Dining Table 1
+   · Taylor & Morgan". The sidebar shows "3 ongoing activities"
+   (`TownActivitySnapshot.activities.length`).
+3. Picking one sends `RecommendationRequest.interactableID`, and the reply names the players,
+   e.g. "Alex and Sam are playing Connect Four. This is a good choice if you want a quick
+   strategy game...".
+4. The player can also type a free-text question (`RecommendationRequest.interests`).
+5. In an empty town, the guide says: "There are no ongoing activities yet. Please check back
+   when more players join the town." (`status: 'town_quiet'`).
+
+**Team decision:** player `userName`s appear in both the UI list and the LLM prompt, because
+everyone in the town can already see them. Player IDs and session tokens are never included.
+`interests` is player-written text that will go into the prompt, so Task 3.3 should treat it
+as untrusted (keep it to 300 characters and clearly separate it from the instructions).
+
+### Schema (`shared/types/CoveyTownSocket.d.ts`)
+
+| Type | Definition |
+| --- | --- |
+| `ActivityKind` | `'conversation' \| 'video' \| 'game'` |
+| `GameKind` | `'TicTacToe' \| 'ConnectFour'` |
+| `ActivityLocation` | `{ zone; center: XY }` |
+| `ActivitySummary` | `{ interactableID; kind; areaName; description?; occupantCount; playerNames; gameKind?; gameStatus?; hasOpenSeat?; location }` |
+| `TownActivitySnapshot` | `{ townID; generatedAt (ISO string); totalPlayers; activities }`. Contains active areas only, sorted by `occupantCount` descending |
+| `RecommendationRequest` | `{ interactableID?; interests? (max 300 characters) }`. If neither is set, the guide picks the best overall activity |
+| `RecommendationStatus` | `'ok' \| 'follow_up' \| 'town_quiet' \| 'no_longer_active' \| 'turn_limit' \| 'llm_unavailable'` |
+| `RecommendationResponse` | `{ status; text (one chat bubble); activity? }` |
+
+Planned routes (Task 3.3; not added yet):
+
+```
+GET  /towns/{townID}/npcs/{npcID}/activities      -> ActivitySummary[]
+POST /towns/{townID}/npcs/{npcID}/recommendation  body RecommendationRequest
+                                                  -> RecommendationResponse
+```
+
+### Status to Story 2 conditions of satisfaction
+
+| `RecommendationStatus` | Story 2 condition of satisfaction | Design |
+| --- | --- | --- |
+| `ok` | The guide recommends a live activity that has players in it, naming them | "Alex and Sam are playing Connect Four. This is a good choice if…" |
+| `ok` (no pick, no clear interest) | **Most-popular fallback:** recommend `activities[0]` | Same bubble, for the most popular activity |
+| `follow_up` | **Follow-up question** when the player's request is too vague to match | Guide bubble asking a question; the player can type a reply |
+| `town_quiet` | **Town quiet:** no active areas | "There are no ongoing activities yet. Please check back when more players join the town." |
+| `no_longer_active` | The picked activity ended between listing and picking (the snapshot is out of date) | Bubble saying it has ended, and the list is refreshed |
+| `turn_limit` | **5-turn cap** per conversation with the guide | Final bubble; the player can start over |
+| `llm_unavailable` | **LLM timeout (> 5 s)** or error: fail gracefully | Apology bubble (the design has no copy for this yet) |
