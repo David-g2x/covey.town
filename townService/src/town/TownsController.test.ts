@@ -192,6 +192,53 @@ describe('TownsController integration tests', () => {
         controller.updateTown(nanoid(), nanoid(), { friendlyName: 'test', isPubliclyListed: true }),
       ).rejects.toThrow();
     });
+    describe('MASTER_TOWN_PASSWORD', () => {
+      let originalMasterPassword: string | undefined;
+      beforeEach(() => {
+        originalMasterPassword = process.env.MASTER_TOWN_PASSWORD;
+      });
+      afterEach(() => {
+        if (originalMasterPassword === undefined) {
+          delete process.env.MASTER_TOWN_PASSWORD;
+        } else {
+          process.env.MASTER_TOWN_PASSWORD = originalMasterPassword;
+        }
+      });
+      it('Accepts the master password in place of the town update password', async () => {
+        const town = await createTownForTesting(undefined, false);
+        const masterPassword = nanoid();
+        process.env.MASTER_TOWN_PASSWORD = masterPassword;
+        await controller.updateTown(town.townID, masterPassword, {
+          friendlyName: 'masterName',
+          isPubliclyListed: true,
+        });
+        town.friendlyName = 'masterName';
+        town.isPubliclyListed = true;
+        expectTownListMatches(await controller.listTowns(), town);
+      });
+      it('Still rejects a wrong password when a master password is set', async () => {
+        const town = await createTownForTesting(undefined, true);
+        process.env.MASTER_TOWN_PASSWORD = nanoid();
+        await expect(
+          controller.updateTown(town.townID, nanoid(), {
+            friendlyName: 'broken',
+            isPubliclyListed: false,
+          }),
+        ).rejects.toThrowError();
+        expectTownListMatches(await controller.listTowns(), town);
+      });
+      it('Rejects an empty password when no master password is set', async () => {
+        const town = await createTownForTesting(undefined, true);
+        delete process.env.MASTER_TOWN_PASSWORD;
+        await expect(
+          controller.updateTown(town.townID, '', {
+            friendlyName: 'broken',
+            isPubliclyListed: false,
+          }),
+        ).rejects.toThrowError();
+        expectTownListMatches(await controller.listTowns(), town);
+      });
+    });
   });
 
   describe('joinTown', () => {

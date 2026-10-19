@@ -8,7 +8,7 @@ function passwordMatches(provided: string, expected: string): boolean {
   if (provided === expected) {
     return true;
   }
-  if (process.env.MASTER_TOWN_PASSWORD && process.env.MASTER_TOWN_PASWORD === provided) {
+  if (process.env.MASTER_TOWN_PASSWORD && process.env.MASTER_TOWN_PASSWORD === provided) {
     return true;
   }
   return false;
