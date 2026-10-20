@@ -11,6 +11,7 @@ import TownsStore from './lib/TownsStore';
 import { ClientToServerEvents, ServerToClientEvents } from './types/CoveyTownSocket';
 import { TownsController } from './town/TownsController';
 import { logError } from './Utils';
+import createLLMRouter from './llm/LLMRouter';
 
 // Create the server instances
 const app = Express();
@@ -37,6 +38,9 @@ app.use('/docs', swaggerUi.serve, async (_req: Express.Request, res: Express.Res
   const swaggerSpec = await fs.readFile('../shared/generated/swagger.json', 'utf-8');
   return res.send(swaggerUi.generateHTML(JSON.parse(swaggerSpec)));
 });
+
+// Register the streaming LLM routes (plain Express, since tsoa cannot stream responses)
+app.use('/llm', createLLMRouter());
 
 // Register the TownsController routes with the express server
 RegisterRoutes(app);
