@@ -129,6 +129,197 @@ export interface NpcModel {
   state: NpcActivityState;
 }
 
+/**
+ * Kind of live activity the AI Town Guide can recommend:
+ * - 'conversation': a ConversationArea with a topic
+ * - 'video': a ViewingArea with a video
+ * - 'game': a TicTacToe or ConnectFour GameArea
+ */
+export type ActivityKind = 'conversation' | 'video' | 'game';
+
+/** Which game a 'game' activity is running */
+export type GameKind = 'TicTacToe' | 'ConnectFour';
+
+/** Where an activity is, so the guide can point the player to it */
+export interface ActivityLocation {
+  /**
+   * Human-readable zone of the town (e.g. "Foyer", "Basement"). The tilemap has no room
+   * concept, so this will come from a future area-to-room config (Task 2.5).
+   */
+  zone: string;
+  /** Center of the area's bounding box, in map pixels */
+  center: XY;
+}
+
+/**
+ * One live activity, as shown in the "Find an Activity" list ("<areaName> · <playerNames>")
+ * and as given to the LLM. Contains player userNames (already visible to everyone in the
+ * town) but never player IDs or session tokens.
+ */
+export interface ActivitySummary {
+  interactableID: InteractableID;
+  kind: ActivityKind;
+  /** Display name of the area from the tilemap (e.g. "Connect Four 2"); same as the ID today */
+  areaName: string;
+  /** The conversation topic or the video URL; omitted for games */
+  description?: string;
+  /** Number of players currently in the area (for games this includes spectators) */
+  occupantCount: number;
+  /**
+   * userNames of the people doing the activity: the game's players for a game, otherwise the
+   * area's occupants
+   */
+  playerNames: string[];
+  /** Set only when kind is 'game' */
+  gameKind?: GameKind;
+  /** Set only when kind is 'game'; never 'OVER', because finished games are not active */
+  gameStatus?: GameStatus;
+  /** Set only when kind is 'game': true if another player can still join */
+  hasOpenSeat?: boolean;
+  location: ActivityLocation;
+}
+
+/**
+ * Snapshot of every active area in a town, built by the server from Town.interactables.
+ * Only active areas are included, sorted by occupantCount descending: index 0 is the
+ * "most popular" fallback, and an empty list means the town is quiet.
+ */
+export interface TownActivitySnapshot {
+  townID: string;
+  /** When the snapshot was built, as an ISO 8601 string */
+  generatedAt: string;
+  /** Number of players currently in the town */
+  totalPlayers: number;
+  activities: ActivitySummary[];
+}
+
+/**
+ * Body of a recommendation request to the AI Town Guide. If neither field is set, the guide
+ * recommends the best overall activity.
+ *
+ * Planned routes (implemented in Task 3.3, not yet added):
+ * - GET  /towns/{townID}/npcs/{npcID}/activities -> ActivitySummary[]
+ * - POST /towns/{townID}/npcs/{npcID}/recommendation, body RecommendationRequest
+ *   -> RecommendationResponse
+ */
+export interface RecommendationRequest {
+  /** The activity the player picked from the "Find an Activity" list */
+  interactableID?: InteractableID;
+  /**
+   * Free-text question or interests typed by the player
+   * @maxLength 300
+   */
+  interests?: string;
+}
+
+/**
+ * Outcome of a recommendation request:
+ * - 'ok': a recommendation was made
+ * - 'follow_up': the guide needs more information and asks a follow-up question
+ * - 'town_quiet': there are no active areas
+ * - 'no_longer_active': the picked activity ended before the guide answered
+ * - 'turn_limit': the player reached the 5-turn cap for this conversation
+ * - 'llm_unavailable': the LLM failed or took longer than 5 s
+ */
+export type RecommendationStatus =
+  | 'ok'
+  | 'follow_up'
+  | 'town_quiet'
+  | 'no_longer_active'
+  | 'turn_limit'
+  | 'llm_unavailable';
+
+/** The AI Town Guide's reply to a recommendation request */
+export interface RecommendationResponse {
+  status: RecommendationStatus;
+  /** Text of one chat bubble */
+  text: string;
+  /** The recommended activity, when there is one */
+  activity?: ActivitySummary;
+}
+
+/**
+ * One active conversation area, as shown in the "Catch Up on a Conversation" list
+ * ("<topic> · <playerNames>"). Server-only metadata such as topicSetAt is kept here, not on
+ * the ConversationArea model, because clients POST that model.
+ */
+export interface ActiveConversationAreaInfo {
+  interactableID: InteractableID;
+  /** Display name of the area from the tilemap (e.g. "Foyer Table 3") */
+  areaName: string;
+  topic: string;
+  occupantCount: number;
+  /** userNames of the area's occupants (never player IDs or session tokens) */
+  playerNames: string[];
+  /** When the current topic was set, in epoch milliseconds */
+  topicSetAt: number;
+  /** Number of chat messages in the area since topicSetAt */
+  messageCount: number;
+}
+
+/**
+ * Body of a catch-up request: summarise this conversation area's text chat.
+ *
+ * Planned routes (not yet added); both require X-Session-Token:
+ * - GET  /towns/{townID}/npcs/{npcID}/conversationAreas -> ActiveConversationAreaInfo[]
+ * - POST /towns/{townID}/npcs/{npcID}/catchUp, body CatchUpRequest -> CatchUpResponse
+ */
+export interface CatchUpRequest {
+  interactableID: InteractableID;
+}
+
+/** One structured point of a catch-up summary */
+export interface CatchUpBullet {
+  /** Whether this is a discussion point, a decision that was made, or an open question */
+  kind: 'point' | 'decision' | 'question';
+  /**
+   * @maxLength 300
+   */
+  text: string;
+  /**
+   * userNames of the players who raised this point. Only server-stamped authors are allowed,
+   * never names taken from client-supplied ChatMessage.author or from message text.
+   */
+  raisedBy: string[];
+}
+
+/**
+ * Outcome of a catch-up request:
+ * - 'ok': a summary was produced
+ * - 'nothing_missed': there are no messages in the summary window
+ * - 'no_active_area': the area has no topic or occupants (or is not a conversation area)
+ * - 'rate_limited': the player asked again within 30 s (see retryAfterSec)
+ * - 'llm_unavailable': the LLM failed or took longer than 5 s
+ */
+export type CatchUpStatus =
+  | 'ok'
+  | 'nothing_missed'
+  | 'no_active_area'
+  | 'rate_limited'
+  | 'llm_unavailable';
+
+/**
+ * The AI Town Guide's catch-up reply. The UI shows `summary` as one paragraph; `bullets` give
+ * testable attribution. Every name mentioned in `summary` must appear in some bullet's
+ * raisedBy.
+ */
+export interface CatchUpResponse {
+  status: CatchUpStatus;
+  interactableID: InteractableID;
+  /** The area's topic, when it has one */
+  topic?: string;
+  /** One paragraph naming who said what; set when status is 'ok' */
+  summary?: string;
+  /** At most 5 bullets; empty unless status is 'ok' */
+  bullets: CatchUpBullet[];
+  /** Start of the summarised window (epoch ms): the area's topicSetAt */
+  windowStart?: number;
+  /** End of the summarised window (epoch ms): the earlier of the player's entry time or now */
+  windowEnd?: number;
+  /** Seconds until the player may ask again; set when status is 'rate_limited' */
+  retryAfterSec?: number;
+}
+
 export interface PlayerLocation {
   /* The CENTER x coordinate of this player's location */
   x: number;
@@ -352,6 +543,11 @@ export interface ServerToClientEvents {
   commandResponse: (response: InteractableCommandResponse) => void;
   /** Sent whenever the town's NPC moves or changes state */
   npcUpdated: (npc: NpcModel) => void;
+  /**
+   * Sent when a conversation area's session ends (its topic is cleared), so clients drop that
+   * area's chat history and the next session starts empty
+   */
+  conversationAreaChatCleared: (interactableID: InteractableID) => void;
 }
 
 export interface ClientToServerEvents {
