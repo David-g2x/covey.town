@@ -238,6 +238,88 @@ export interface RecommendationResponse {
   activity?: ActivitySummary;
 }
 
+/**
+ * One active conversation area, as shown in the "Catch Up on a Conversation" list
+ * ("<topic> · <playerNames>"). Server-only metadata such as topicSetAt is kept here, not on
+ * the ConversationArea model, because clients POST that model.
+ */
+export interface ActiveConversationAreaInfo {
+  interactableID: InteractableID;
+  /** Display name of the area from the tilemap (e.g. "Foyer Table 3") */
+  areaName: string;
+  topic: string;
+  occupantCount: number;
+  /** userNames of the area's occupants (never player IDs or session tokens) */
+  playerNames: string[];
+  /** When the current topic was set, in epoch milliseconds */
+  topicSetAt: number;
+  /** Number of chat messages in the area since topicSetAt */
+  messageCount: number;
+}
+
+/**
+ * Body of a catch-up request: summarise this conversation area's text chat.
+ *
+ * Planned routes (not yet added); both require X-Session-Token:
+ * - GET  /towns/{townID}/npcs/{npcID}/conversationAreas -> ActiveConversationAreaInfo[]
+ * - POST /towns/{townID}/npcs/{npcID}/catchUp, body CatchUpRequest -> CatchUpResponse
+ */
+export interface CatchUpRequest {
+  interactableID: InteractableID;
+}
+
+/** One structured point of a catch-up summary */
+export interface CatchUpBullet {
+  /** Whether this is a discussion point, a decision that was made, or an open question */
+  kind: 'point' | 'decision' | 'question';
+  /**
+   * @maxLength 300
+   */
+  text: string;
+  /**
+   * userNames of the players who raised this point. Only server-stamped authors are allowed,
+   * never names taken from client-supplied ChatMessage.author or from message text.
+   */
+  raisedBy: string[];
+}
+
+/**
+ * Outcome of a catch-up request:
+ * - 'ok': a summary was produced
+ * - 'nothing_missed': there are no messages in the summary window
+ * - 'no_active_area': the area has no topic or occupants (or is not a conversation area)
+ * - 'rate_limited': the player asked again within 30 s (see retryAfterSec)
+ * - 'llm_unavailable': the LLM failed or took longer than 5 s
+ */
+export type CatchUpStatus =
+  | 'ok'
+  | 'nothing_missed'
+  | 'no_active_area'
+  | 'rate_limited'
+  | 'llm_unavailable';
+
+/**
+ * The AI Town Guide's catch-up reply. The UI shows `summary` as one paragraph; `bullets` give
+ * testable attribution. Every name mentioned in `summary` must appear in some bullet's
+ * raisedBy.
+ */
+export interface CatchUpResponse {
+  status: CatchUpStatus;
+  interactableID: InteractableID;
+  /** The area's topic, when it has one */
+  topic?: string;
+  /** One paragraph naming who said what; set when status is 'ok' */
+  summary?: string;
+  /** At most 5 bullets; empty unless status is 'ok' */
+  bullets: CatchUpBullet[];
+  /** Start of the summarised window (epoch ms): the area's topicSetAt */
+  windowStart?: number;
+  /** End of the summarised window (epoch ms): the earlier of the player's entry time or now */
+  windowEnd?: number;
+  /** Seconds until the player may ask again; set when status is 'rate_limited' */
+  retryAfterSec?: number;
+}
+
 export interface PlayerLocation {
   /* The CENTER x coordinate of this player's location */
   x: number;
@@ -461,6 +543,11 @@ export interface ServerToClientEvents {
   commandResponse: (response: InteractableCommandResponse) => void;
   /** Sent whenever the town's NPC moves or changes state */
   npcUpdated: (npc: NpcModel) => void;
+  /**
+   * Sent when a conversation area's session ends (its topic is cleared), so clients drop that
+   * area's chat history and the next session starts empty
+   */
+  conversationAreaChatCleared: (interactableID: InteractableID) => void;
 }
 
 export interface ClientToServerEvents {
