@@ -15,6 +15,11 @@ export type TownJoinResponse = {
   isPubliclyListed: boolean;
   /** Current state of interactables in this town */
   interactables: TypedInteractable[];
+  /**
+   * Public view of this town's AI Town Guide. Optional so that existing fixtures (and towns
+   * created before NPC support) remain valid. Never contains the owner's domainContext.
+   */
+  npc?: NpcModel;
 }
 
 export type InteractableType = 'ConversationArea' | 'ViewingArea' | 'TicTacToeArea' | 'ConnectFourArea';
@@ -39,6 +44,90 @@ export interface Player {
 };
 
 export type XY = { x: number, y: number };
+
+/** Unique ID that identifies an NPC (the "AI Town Guide") within a town */
+export type NpcID = string;
+
+/**
+ * Character model of the AI Town Guide. The API stores these IDs; the frontend maps them to
+ * labels and sprites. Listed in the design's picker order (index 0-5):
+ * - 'sky-explorer-male': "Sky Explorer · Male"
+ * - 'cozy-guide-male': "Cozy Guide · Male"
+ * - 'tech-friend-male': "Tech Friend · Male"
+ * - 'sky-explorer-female': "Sky Explorer · Female" (default)
+ * - 'cozy-guide-female': "Cozy Guide · Female"
+ * - 'tech-friend-female': "Tech Friend · Female"
+ */
+export type NpcAppearanceID =
+  | 'sky-explorer-male'
+  | 'cozy-guide-male'
+  | 'tech-friend-male'
+  | 'sky-explorer-female'
+  | 'cozy-guide-female'
+  | 'tech-friend-female';
+
+/**
+ * Personality of the AI Town Guide, chosen from the design's "Personality Type" dropdown:
+ * - 'friendly-helper': "Friendly helper" (default)
+ * - 'curious-explorer': "Curious explorer"
+ * - 'witty-sidekick': "Witty sidekick"
+ * - 'calm-mentor': "Calm mentor"
+ *
+ * Because this is a fixed list, the server maps each ID to its own prompt text, and the owner
+ * cannot inject free text into the persona part of the LLM prompt.
+ */
+export type NpcPersonality = 'friendly-helper' | 'curious-explorer' | 'witty-sidekick' | 'calm-mentor';
+
+/**
+ * Owner-provided configuration of a town's AI Town Guide, set on the town-creation form.
+ * Length limits are enforced by tsoa request validation (422 on violation).
+ *
+ * Defaults (used when the "Add an AI Town Guide" toggle is off, or for any omitted field):
+ * name "Jane Doe", appearance 'sky-explorer-female', personality 'friendly-helper',
+ * no domainContext.
+ */
+export interface NpcConfig {
+  /**
+   * Name shown for the guide ("AI Town Guide Name")
+   * @minLength 1
+   * @maxLength 24
+   */
+  name: string;
+  /** Character model ("Character Model") */
+  appearance: NpcAppearanceID;
+  /** Personality ("Personality Type") */
+  personality: NpcPersonality;
+  /**
+   * Optional background knowledge for the guide. Not on the design's form, but required by
+   * User Story 1. Owner-only: it is never broadcast to clients.
+   * @minLength 1
+   * @maxLength 500
+   */
+  domainContext?: string;
+}
+
+/**
+ * NPC configuration as accepted in requests: every field is optional, and omitted fields
+ * fall back to the defaults documented on NpcConfig.
+ */
+export type NpcConfigInput = Partial<NpcConfig>;
+
+/** What the NPC is currently doing: walking its route, or stopped and facing a player */
+export type NpcActivityState = 'patrolling' | 'facing-player';
+
+/**
+ * Public view of the AI Town Guide that is sent to every client in the town (players see the
+ * guide's name and model, and the chat header shows "● Online · <personality>").
+ * Intentionally excludes domainContext.
+ */
+export interface NpcModel {
+  id: NpcID;
+  name: string;
+  appearance: NpcAppearanceID;
+  personality: NpcPersonality;
+  location: PlayerLocation;
+  state: NpcActivityState;
+}
 
 export interface PlayerLocation {
   /* The CENTER x coordinate of this player's location */
@@ -261,6 +350,8 @@ export interface ServerToClientEvents {
   chatMessage: (message: ChatMessage) => void;
   interactableUpdate: (interactable: Interactable) => void;
   commandResponse: (response: InteractableCommandResponse) => void;
+  /** Sent whenever the town's NPC moves or changes state */
+  npcUpdated: (npc: NpcModel) => void;
 }
 
 export interface ClientToServerEvents {

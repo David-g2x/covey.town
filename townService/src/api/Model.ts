@@ -1,3 +1,5 @@
+import { NpcConfigInput } from '../types/CoveyTownSocket';
+
 /**
  * The public-facing model that represents a town. More information about the town
  * is available for users who join it.
@@ -57,4 +59,16 @@ export interface TownCreateParams {
    * Not currently used on frontend
    */
   mapFile?: string;
+
+  /**
+   * Optional configuration for the town's AI Town Guide (name, character model, personality,
+   * domain context). Omitted fields, or the whole object, fall back to the default guide.
+   *
+   * No password is required: the town update password is only generated when the town is
+   * constructed, so whoever creates the town is its owner. Later edits will go through a
+   * separate owner-only endpoint (PATCH /towns/{townID}/npc) that checks X-CoveyTown-Password.
+   * This config is deliberately NOT part of TownSettingsUpdate, because those updates are
+   * broadcast to every client.
+   */
+  npcConfig?: NpcConfigInput;
 }
