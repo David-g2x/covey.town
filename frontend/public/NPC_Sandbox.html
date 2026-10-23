@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NPC Patrol Prototype</title>
+
+  <style>
+    body {
+      margin: 0;
+      background: #202530;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    main {
+      max-width: 960px;
+      margin: auto;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 22px;
+    }
+
+    button {
+      padding: 9px 14px;
+      margin: 0 6px 8px 0;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+
+    label {
+      display: inline-block;
+      margin: 4px 0 8px;
+    }
+
+    #status {
+      min-height: 24px;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+
+    textarea {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 130px;
+      margin-top: 10px;
+      padding: 10px;
+      background: #151923;
+      color: #9fffe5;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>NPC Patrol Prototype</h1>
+
+    <p>
+      Click Edit Route, then click clear floor locations in order.
+      The last checkpoint connects back to the first.
+      Leave enough clearance around walls and furniture.
+    </p>
+
+    <div>
+      <button id="edit" disabled>Edit Route</button>
+      <button id="undo" disabled>Undo Point</button>
+      <button id="start" disabled>Start Patrol</button>
+      <button id="pause" disabled>Resume</button>
+    </div>
+
+    <label>
+      <input id="stop-at-checkpoints" type="checkbox" checked />
+      Stop at checkpoints
+    </label>
+
+    <p id="status">Loading Phaser...</p>
+
+    <div id="game"></div>
+
+    <p>
+      To keep your route, copy these coordinates into
+      <code>this.defaultWaypoints</code> in the source code.
+      Otherwise, refreshing restores the default route.
+    </p>
+
+    <textarea id="coordinates" readonly></textarea>
+  </main>
+
+  <script>
+    const statusText = document.getElementById('status');
+    const coordinates = document.getElementById('coordinates');
+    const editButton = document.getElementById('edit');
+    const undoButton = document.getElementById('undo');
+    const startButton = document.getElementById('start');
+    const pauseButton = document.getElementById('pause');
+    const stopCheckbox = document.getElementById('stop-at-checkpoints');
+
+    window.addEventListener('error', event => {
+      if (event.message) {
+        statusText.textContent = 'Error: ' + event.message;
+      }
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+
+  <script>
+    if (!window.Phaser) {
+      statusText.textContent =
+        'Phaser could not load. Check your internet connection.';
+    } else {
+      class NPCSandbox extends Phaser.Scene {
+        constructor() {
+          super('NPCSandbox');
+
+          // NPC's ROUTE: Edit these coordinates or numbers to reflect the route you want to save
+          // Paste the coordinates generated in the sandbox
+          // Note: Collision isnt taken into account so npc will go through object if chosen route goes through object
+          this.defaultWaypoints = [ //changing these coordinates, changes the predefined route
+              { x: 3371, y: 831 },
+              { x: 3539, y: 919 },
+              { x: 3677, y: 925 },
+              { x: 3678, y: 1261 },
+              { x: 3479, y: 1249 },
+              { x: 3485, y: 1045 },
+              { x: 3403, y: 1050 },
+              { x: 3421, y: 1236 },
+              { x: 3340, y: 1255 },
+              { x: 3274, y: 1249 },
+              { x: 3278, y: 1065 },
+              { x: 3187, y: 1056 },
+              { x: 3185, y: 1243 },
+              { x: 3122, y: 1253 },
+              { x: 3022, y: 1241 },
+              { x: 3000, y: 979 },
+              { x: 3090, y: 972 },
+              { x: 3094, y: 882 },
+              { x: 3001, y: 875 },
+              { x: 3002, y: 817 },
+              { x: 3197, y: 820 },
+              { x: 3190, y: 876 },
+              { x: 3305, y: 874 },
+              { x: 3299, y: 990 },
+              { x: 3452, y: 994 },
+              { x: 3456, y: 928 },
+          ];
+
+          // NPC's STOP TIME: Change this number to control how long the NPC pauses for at waypoint
+          // Note this is in milliseconds (Milliseconds: 1000 = 1 second)
+          this.stopDuration = 350;
+
+          // WALKING SPEED: Map pixels traveled per second.
+          this.speed = 65;
+
+
+          this.waypoints = this.defaultWaypoints.map(point => ({
+            x: point.x,
+            y: point.y,
+          }));
+
+          this.targetIndex = 1;
+          this.completedLoops = 0;
+          this.stopRemaining = 0;
+          this.assetErrors = [];
+          this.editing = false;
+          this.running = false;
+          this.patrolStarted = false;
+          this.facing = 'front';
+
+          this.tilesetNames = [
+            'Room_Builder_32x32',
+            '22_Museum_32x32',
+            '5_Classroom_and_library_32x32',
+            '12_Kitchen_32x32',
+            '1_Generic_32x32',
+            '13_Conference_Hall_32x32',
+            '14_Basement_32x32',
+            '16_Grocery_store_32x32',
+          ];
+        }
+
+        preload() {
+          statusText.textContent = 'Loading map and character...';
+
+          this.load.on('loaderror', file => {
+            this.assetErrors.push(file.key);
+            statusText.textContent =
+              'Failed to load: ' + this.assetErrors.join(', ');
+          });
+
+          for (const name of this.tilesetNames) {
+            this.load.image(
+              name,
+              '/assets/tilesets/' + name + '.png'
+            );
+          }
+
+          this.load.tilemapTiledJSON(
+            'map',
+            '/assets/tilemaps/indoors.json'
+          );
+
+          // Load Covey.Town's existing character atlas.
+          this.load.atlas(
+            'atlas',
+            '/assets/atlas/atlas.png',
+            '/assets/atlas/atlas.json'
+          );
+        }
+
+        create() {
+          if (this.assetErrors.length) {
+            return;
+          }
+
+          if (
+            !Number.isFinite(this.stopDuration) ||
+            this.stopDuration < 0
+          ) {
+            throw new Error(
+              'Stop duration must be a number greater than or equal to 0.'
+            );
+          }
+
+          if (!Number.isFinite(this.speed) || this.speed <= 0) {
+            throw new Error('Walking speed must be greater than 0.');
+          }
+
+          const map = this.make.tilemap({ key: 'map' });
+
+          if (
+            !this.isValidRoute() ||
+            this.waypoints.some(point =>
+              point.x >= map.widthInPixels ||
+              point.y >= map.heightInPixels
+            )
+          ) {
+            throw new Error(
+              'The default route needs at least two valid checkpoints inside the map.'
+            );
+          }
+
+          const tilesets = this.tilesetNames.map(name => {
+            const tileset = map.addTilesetImage(name, name);
+
+            if (!tileset) {
+              throw new Error('Missing tileset: ' + name);
+            }
+
+            return tileset;
+          });
+
+          for (const [name, depth] of [
+            ['Below Player', -10],
+            ['Walls', 0],
+            ['On The Walls', 0],
+            ['World', 5],
+            ['Above Player', 10],
+            ['Very Above Player', 15],
+          ]) {
+            const layer = map.createLayer(name, tilesets, 0, 0);
+
+            if (!layer) {
+              throw new Error('Missing map layer: ' + name);
+            }
+
+            layer.setDepth(depth);
+          }
+
+          for (const direction of ['front', 'left', 'back', 'right']) {
+            this.anims.create({
+              key: 'npc-' + direction,
+              frames: this.anims.generateFrameNames('atlas', {
+                prefix: 'misa-' + direction + '-walk.',
+                start: 0,
+                end: 3,
+                zeroPad: 3,
+              }),
+              frameRate: 10,
+              repeat: -1,
+            });
+          }
+
+          const first = this.waypoints[0];
+
+          this.npc = this.add
+            .sprite(first.x, first.y, 'atlas', 'misa-front')
+            .setDepth(6);
+
+          this.npcLabel = this.add
+            .text(0, 0, 'NPC Guide', {
+              fontSize: '14px',
+              color: '#ffffff',
+              backgroundColor: '#202530',
+              padding: { x: 5, y: 3 },
+            })
+            .setOrigin(0.5, 1)
+            .setDepth(20);
+
+          this.routeGraphics = this.add.graphics().setDepth(25);
+          this.pointLabels = [];
+
+          this.cameras.main.setBounds(
+            0,
+            0,
+            map.widthInPixels,
+            map.heightInPixels
+          );
+
+          // Show the games and dining-table section.
+          this.cameras.main.centerOn(3296, 960);
+
+          editButton.onclick = () => this.beginEditing();
+          undoButton.onclick = () => this.undoPoint();
+          startButton.onclick = () => this.startPatrol();
+          pauseButton.onclick = () => this.togglePause();
+
+          stopCheckbox.onchange = () => {
+            // Unchecking cancels any current checkpoint stop.
+            if (!stopCheckbox.checked) {
+              this.stopRemaining = 0;
+
+              if (this.running) {
+                this.showPatrolStatus();
+              }
+            }
+          };
+
+          this.input.on('pointerdown', pointer => {
+            if (!this.editing) {
+              return;
+            }
+
+            const world = this.cameras.main.getWorldPoint(
+              pointer.x,
+              pointer.y
+            );
+
+            const point = {
+              x: Math.round(world.x),
+              y: Math.round(world.y),
+            };
+
+            if (
+              point.x < 0 ||
+              point.y < 0 ||
+              point.x >= map.widthInPixels ||
+              point.y >= map.heightInPixels
+            ) {
+              return;
+            }
+
+            const previous = this.waypoints[this.waypoints.length - 1];
+
+            if (
+              previous &&
+              previous.x === point.x &&
+              previous.y === point.y
+            ) {
+              return;
+            }
+
+            this.waypoints.push(point);
+
+            if (this.waypoints.length === 1) {
+              this.npc.setPosition(point.x, point.y);
+              this.positionLabel();
+            }
+
+            this.drawRoute();
+            this.updateControls();
+
+            statusText.textContent =
+              this.waypoints.length +
+              ' checkpoints selected. Click Start Patrol to test.';
+          });
+
+          this.positionLabel();
+          this.drawRoute();
+          this.updateControls();
+
+          statusText.textContent =
+            'Ready. Inspect the default route or click Edit Route.';
+        }
+
+        isValidRoute() {
+          return (
+            this.waypoints.length >= 2 &&
+            this.waypoints.every(point =>
+              point &&
+              Number.isFinite(point.x) &&
+              Number.isFinite(point.y) &&
+              point.x >= 0 &&
+              point.y >= 0
+            )
+          );
+        }
+
+        stopWalking() {
+          this.npc.anims.stop();
+
+          // Keep facing the previous walking direction.
+          this.npc.setTexture('atlas', 'misa-' + this.facing);
+        }
+
+        resetPatrol() {
+          this.running = false;
+          this.patrolStarted = false;
+          this.completedLoops = 0;
+          this.stopRemaining = 0;
+          this.targetIndex = 1;
+          this.stopWalking();
+        }
+
+        beginEditing() {
+          this.resetPatrol();
+          this.editing = true;
+
+          // Clear the working route without changing the code default.
+          this.waypoints = [];
+
+          this.drawRoute();
+          this.updateControls();
+
+          statusText.textContent =
+            'Click the starting location, then each turn on clear floor.';
+        }
+
+        undoPoint() {
+          if (!this.editing) {
+            return;
+          }
+
+          this.waypoints.pop();
+          this.drawRoute();
+          this.updateControls();
+
+          statusText.textContent =
+            this.waypoints.length + ' checkpoints selected.';
+        }
+
+        startPatrol() {
+          if (!this.isValidRoute()) {
+            return;
+          }
+
+          this.resetPatrol();
+
+          const first = this.waypoints[0];
+          this.npc.setPosition(first.x, first.y);
+          this.positionLabel();
+
+          this.editing = false;
+          this.running = true;
+          this.patrolStarted = true;
+
+          this.updateControls();
+          this.showPatrolStatus();
+        }
+
+        togglePause() {
+          if (!this.patrolStarted || this.editing) {
+            return;
+          }
+
+          this.running = !this.running;
+
+          if (!this.running) {
+            this.stopWalking();
+            statusText.textContent = 'Patrol paused.';
+          } else {
+            this.showPatrolStatus();
+          }
+
+          this.updateControls();
+        }
+
+        updateControls() {
+          editButton.disabled = false;
+
+          undoButton.disabled =
+            !this.editing || this.waypoints.length === 0;
+
+          startButton.disabled = !this.isValidRoute();
+
+          pauseButton.disabled =
+            !this.patrolStarted || this.editing;
+
+          pauseButton.textContent = this.running ? 'Pause' : 'Resume';
+        }
+
+        drawRoute() {
+          this.routeGraphics.clear();
+
+          for (const label of this.pointLabels) {
+            label.destroy();
+          }
+
+          this.pointLabels = [];
+
+          if (this.waypoints.length >= 2) {
+            this.routeGraphics.lineStyle(2, 0x00ffcc, 0.9);
+            this.routeGraphics.strokePoints(this.waypoints, true);
+          }
+
+          this.waypoints.forEach((point, index) => {
+            this.routeGraphics.fillStyle(
+              index === 0 ? 0xffd166 : 0x00ffcc
+            );
+
+            this.routeGraphics.fillCircle(point.x, point.y, 5);
+
+            const label = this.add
+              .text(point.x + 8, point.y - 8, String(index + 1), {
+                fontSize: '13px',
+                color: '#ffffff',
+                backgroundColor: '#202530',
+              })
+              .setDepth(26);
+
+            this.pointLabels.push(label);
+          });
+
+          coordinates.value =
+            'this.defaultWaypoints = [\n' +
+            this.waypoints
+              .map(point =>
+                '  { x: ' + point.x + ', y: ' + point.y + ' },'
+              )
+              .join('\n') +
+            '\n];';
+        }
+
+        positionLabel() {
+          this.npcLabel.setPosition(this.npc.x, this.npc.y - 40);
+        }
+
+        showPatrolStatus() {
+          const action = this.stopRemaining > 0
+            ? 'NPC stopped at checkpoint'
+            : 'NPC patrolling';
+
+          statusText.textContent =
+            action + ' | Completed loops: ' + this.completedLoops;
+        }
+
+        update(time, delta) {
+          if (
+            !this.npc ||
+            !this.running ||
+            this.waypoints.length < 2
+          ) {
+            return;
+          }
+
+          // Limit movement jumps after delayed frames.
+          const frameDelta = Math.min(delta, 50);
+
+          // CHECKPOINT STOP: Stay in place without changing facing direction.
+          if (this.stopRemaining > 0 && stopCheckbox.checked) {
+            this.stopRemaining = Math.max(
+              0,
+              this.stopRemaining - frameDelta
+            );
+
+            this.stopWalking();
+            this.showPatrolStatus();
+            this.positionLabel();
+
+            // Skip movement while waiting at the checkpoint.
+            return;
+          }
+
+          this.stopRemaining = 0;
+
+          const target = this.waypoints[this.targetIndex];
+          const dx = target.x - this.npc.x;
+          const dy = target.y - this.npc.y;
+          const distance = Math.hypot(dx, dy);
+          const step = this.speed * frameDelta / 1000;
+
+          if (distance <= step) {
+            this.npc.setPosition(target.x, target.y);
+
+            if (this.targetIndex === 0) {
+              this.completedLoops += 1;
+            }
+
+            // Continue through the checkpoints in a repeating loop.
+            if (this.completedLoops % 2 === 0) {
+              this.targetIndex =
+                (this.targetIndex + 1) % this.waypoints.length;
+            } else { // Follows route counterclockwise after one clockwise loop
+              this.targetIndex =
+                (this.targetIndex - 1 + this.waypoints.length) %
+                this.waypoints.length;
+            }
+
+            // Begin a stationary pause after reaching a checkpoint.
+            if (stopCheckbox.checked) {
+              this.stopRemaining = this.stopDuration;
+              this.stopWalking();
+            }
+
+            this.showPatrolStatus();
+          } else {
+            this.facing =
+              Math.abs(dx) > Math.abs(dy)
+                ? (dx > 0 ? 'right' : 'left')
+                : (dy > 0 ? 'front' : 'back');
+
+            this.npc.anims.play('npc-' + this.facing, true);
+
+            this.npc.x += (dx / distance) * step;
+            this.npc.y += (dy / distance) * step;
+
+            this.showPatrolStatus();
+          }
+
+          this.positionLabel();
+        }
+      }
+
+      new Phaser.Game({
+        type: Phaser.CANVAS,
+        width: 960,
+        height: 640,
+        parent: 'game',
+        backgroundColor: '#202530',
+        pixelArt: true,
+        scene: NPCSandbox,
+      });
+    }
+  </script>
+</body>
+</html>
