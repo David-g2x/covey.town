@@ -14,6 +14,7 @@ import {
 import {
   ChatMessage,
   Interactable,
+  NpcModel,
   PlayerID,
   PlayerLocation,
   TownEmitter,
@@ -362,6 +363,137 @@ describe('Town', () => {
     playerTestData.moveTo(-1, -1);
 
     mockReset(townEmitter);
+  });
+
+  /** Checks how Town creates, reads, and updates its own NPC. */
+  describe('NPC state management', () => {
+    let npcData: NpcModel;
+
+    /** Creates fresh example NPC data before each test. */
+    beforeEach(() => {
+      npcData = {
+        id: 'town-guide',
+        name: 'Jane Doe',
+        appearance: 'sky-explorer-female',
+        personality: 'friendly-helper',
+        location: {
+          x: 100,
+          y: 200,
+          rotation: 'front',
+          moving: false,
+        },
+        state: 'patrolling',
+      };
+    });
+
+    /** Checks that Town reports no NPC before initialization. */
+    it('has no NPC before initialization', () => {
+      expect(town.npc).toBeUndefined();
+    });
+
+    /** Checks that Town creates its NPC using the supplied data. */
+    it('initializes its NPC with the supplied data', () => {
+      town.initializeNpc(npcData);
+
+      expect(town.npc).toEqual(npcData);
+    });
+
+    /** Checks that initialization cannot replace an existing NPC. */
+    it('rejects duplicate initialization without changing its NPC', () => {
+      town.initializeNpc(npcData);
+
+      const replacement: NpcModel = {
+        ...npcData,
+        name: 'Replacement',
+        location: { ...npcData.location, x: 999 },
+      };
+
+      expect(() => town.initializeNpc(replacement)).toThrow(
+        'Owner has already created NPC for the town',
+      );
+
+      expect(town.npc).toEqual(npcData);
+    });
+
+    /** Checks that movement cannot be updated before the NPC exists. */
+    it('rejects movement updates before initialization', () => {
+      expect(() => town.updateNpcMovement(npcData.location, 'patrolling')).toThrow(
+        'Town has not initialized NPC',
+      );
+
+      expect(town.npc).toBeUndefined();
+    });
+
+    /** Checks that appearance cannot be updated before the NPC exists. */
+    it('rejects appearance updates before initialization', () => {
+      expect(() => town.updateNpcAppearance('cozy-guide-male')).toThrow(
+        'Town has not initialized NPC',
+      );
+
+      expect(town.npc).toBeUndefined();
+    });
+
+    /** Checks that Town updates movement while preserving other NPC fields. */
+    it('updates its NPC movement and behavior', () => {
+      town.initializeNpc(npcData);
+
+      const location: PlayerLocation = {
+        x: 150,
+        y: 200,
+        rotation: 'left',
+        moving: false,
+      };
+
+      town.updateNpcMovement(location, 'facing-player');
+
+      expect(town.npc).toEqual({
+        ...npcData,
+        location,
+        state: 'facing-player',
+      });
+    });
+
+    /** Checks that Town updates appearance while preserving other NPC fields. */
+    it('updates its NPC appearance', () => {
+      town.initializeNpc(npcData);
+
+      town.updateNpcAppearance('cozy-guide-male');
+
+      expect(town.npc).toEqual({
+        ...npcData,
+        appearance: 'cozy-guide-male',
+      });
+    });
+
+    /** Checks that changing a returned copy cannot change Town's stored NPC. */
+    it('returns a copy of its NPC data', () => {
+      town.initializeNpc(npcData);
+
+      const snapshot = town.npc;
+      if (!snapshot) {
+        throw new Error('Expected an initialized NPC');
+      }
+
+      snapshot.location.x = 999;
+      snapshot.name = 'Changed';
+
+      expect(town.npc).toEqual(npcData);
+    });
+
+    /** Checks that updating one town's NPC does not affect another town's NPC. */
+    it('keeps NPC state separate between towns', () => {
+      const otherTown = new Town(nanoid(), false, nanoid(), townEmitter);
+
+      town.initializeNpc(npcData);
+      otherTown.initializeNpc(npcData);
+
+      town.updateNpcMovement({ x: 300, y: 200, rotation: 'right', moving: true }, 'patrolling');
+      town.updateNpcAppearance('cozy-guide-male');
+
+      expect(otherTown.npc).toEqual(npcData);
+      expect(town.npc?.location.x).toBe(300);
+      expect(town.npc?.appearance).toBe('cozy-guide-male');
+    });
   });
 
   it('constructor should set its properties', () => {

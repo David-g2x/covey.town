@@ -13,6 +13,9 @@ import {
   Interactable,
   InteractableCommand,
   InteractableCommandBase,
+  NpcActivityState,
+  NpcAppearanceID,
+  NpcModel,
   PlayerLocation,
   ServerToClientEvents,
   SocketData,
@@ -22,6 +25,7 @@ import { logError } from '../Utils';
 import ConversationArea from './ConversationArea';
 import GameAreaFactory from './games/GameAreaFactory';
 import InteractableArea from './InteractableArea';
+import Npc from './Npc';
 import ViewingArea from './ViewingArea';
 
 /**
@@ -95,6 +99,9 @@ export default class Town {
 
   private _chatMessages: ChatMessage[] = [];
 
+  /** Stores the town's NPC object. Made it optional so town can be created before its NPC */
+  private _npc?: Npc;
+
   constructor(
     friendlyName: string,
     isPubliclyListed: boolean,
@@ -107,6 +114,54 @@ export default class Town {
     this._isPubliclyListed = isPubliclyListed;
     this._friendlyName = friendlyName;
     this._broadcastEmitter = broadcastEmitter;
+  }
+
+  /**
+   * Creates and stores the town's NPC using:
+   * The owner's setting
+   * Server-define position and state
+   */
+
+  public initializeNpc(model: NpcModel): void {
+    if (this._npc) {
+      throw new Error('Owner has already created NPC for the town');
+    }
+
+    this._npc = new Npc(model);
+  }
+
+  /**
+   * Makes a copy of the NPC's data
+   * So that the stored object isnt directly exposed
+   */
+
+  public get npc(): NpcModel | undefined {
+    return this._npc?.toModel();
+  }
+
+  /**
+   * Stores the NPC's latest server-calculated position and movement state.
+   */
+
+  public updateNpcMovement(location: PlayerLocation, state: NpcActivityState): void {
+    if (!this._npc) {
+      throw new Error('Town has not initialized NPC');
+    }
+
+    this._npc.updateMovement(location, state);
+    // TODO (#27): Broadcast the updated NPC state to players in this town.
+  }
+
+  /**
+   * Updates the NPC's appearance to the selected premade character model
+   */
+
+  public updateNpcAppearance(appearance: NpcAppearanceID): void {
+    if (!this._npc) {
+      throw new Error('Town has not initialized NPC');
+    }
+
+    this._npc.updateAppearance(appearance);
   }
 
   /**
